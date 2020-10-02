@@ -17,6 +17,10 @@ from utils.general import (
     xyxy2xywh, plot_one_box, strip_optimizer, set_logging)
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
+# Customize
+from app.config import config as app_config
+from app.notification import NotificationManager, BoundingBox
+from uuid import uuid4
 
 def detect(save_img=False):
     out, source, weights, view_img, save_txt, imgsz = \
@@ -30,6 +34,9 @@ def detect(save_img=False):
         shutil.rmtree(out)  # delete output folder
     os.makedirs(out)  # make new output folder
     half = device.type != 'cpu'  # half precision only supported on CUDA
+
+    # Customize: Notifications
+    noti_manager = NotificationManager(server=app_config['Notification']['server'])
 
     # Load model
     model = attempt_load(weights, map_location=device)  # load FP32 model
@@ -92,6 +99,7 @@ def detect(save_img=False):
             txt_path = str(Path(out) / Path(p).stem) + ('_%g' % dataset.frame if dataset.mode == 'video' else '')
             s += '%gx%g ' % img.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            
             if det is not None and len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
@@ -100,6 +108,10 @@ def detect(save_img=False):
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
                     s += '%g %ss, ' % (n, names[int(c)])  # add to string
+
+                # Custom: Notify classes detected
+                cls_det = [int(d.item()) for d in det[:, -1].unique()]
+                cls_noti = list(set(app_config['Notification']['notify_classes']) & set(cls_det))
 
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
@@ -111,6 +123,21 @@ def detect(save_img=False):
                     if save_img or view_img:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
+
+                    # Custom: Notify if the class is in classes detected
+                    # if cls in cls_noti:
+                    #     coords = [t.item() for t in xyxy]
+                    #     bnd_box = BoundingBox(coords[0], coords[2], coords[1], coords[3])
+
+                    #     # Save image and read the file descriptor
+                    #     temp_dir = app_config['Paths']['temp_dir']
+
+                    #     if not os.path.exists(temp_dir):
+                    #         os.mkdir(temp_dir)
+
+                    #     img_save_path = os.path.join(temp_dir, str(uuid4()) + '.jpg')
+                    #     cv2.imwrite(img_save_path, im0)
+                    #     noti_manager.notify(label.split(' ')[0], bnd_box, (img_save_path, open(img_save_path, 'rb')))
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
@@ -165,9 +192,17 @@ if __name__ == '__main__':
     print(opt)
 
     with torch.no_grad():
-        if opt.update:  # update all models (to fix SourceChangeWarning)
-            for opt.weights in ['yolov5s.pt', 'yolov5m.pt', 'yolov5l.pt', 'yolov5x.pt']:
+        try:
+            if opt.update:  # update all models (to fix SourceChangeWarning)
+                for opt.weights in ['yolov5s.pt', 'yolov5m.pt', 'yolov5l.pt', 'yolov5x.pt']:
+                    detect()
+                    strip_optimizer(opt.weights)
+            else:
                 detect()
-                strip_optimizer(opt.weights)
-        else:
-            detect()
+        finally:
+            temp_dir = app_config['Paths']['temp_dir']
+
+            if os.path.exists(temp_dir):
+                for fname in os.listdir(temp_dir):
+                    os.remove(os.path.join(temp_dir, fname))
+

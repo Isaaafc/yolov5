@@ -21,6 +21,24 @@ from utils.torch_utils import select_device, load_classifier, time_synchronized
 from app.config import config as app_config
 from app.notification import NotificationManager, BoundingBox
 from uuid import uuid4
+import asyncio
+
+async def send_notification(noti_manager, im0, xyxy, label):
+    try:
+        coords = [t.item() for t in xyxy]
+        bnd_box = BoundingBox(coords[0], coords[2], coords[1], coords[3])
+
+        # Save image and read the file descriptor
+        temp_dir = app_config['Paths']['temp_dir']
+
+        if not os.path.exists(temp_dir):
+            os.mkdir(temp_dir)
+
+        img_save_path = os.path.join(temp_dir, str(uuid4()) + '.jpg')
+        cv2.imwrite(img_save_path, im0)
+        await noti_manager.notify(label.split(' ')[0], bnd_box, (img_save_path, open(img_save_path, 'rb')))
+    except Exception as e:
+        print(str(e))
 
 def detect(save_img=False):
     out, source, weights, view_img, save_txt, imgsz = \
@@ -120,24 +138,14 @@ def detect(save_img=False):
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
-                    if save_img or view_img:  # Add bbox to image
+                    if (save_img or view_img) and cls != 2:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
 
                     # Custom: Notify if the class is in classes detected
-                    # if cls in cls_noti:
-                    #     coords = [t.item() for t in xyxy]
-                    #     bnd_box = BoundingBox(coords[0], coords[2], coords[1], coords[3])
-
-                    #     # Save image and read the file descriptor
-                    #     temp_dir = app_config['Paths']['temp_dir']
-
-                    #     if not os.path.exists(temp_dir):
-                    #         os.mkdir(temp_dir)
-
-                    #     img_save_path = os.path.join(temp_dir, str(uuid4()) + '.jpg')
-                    #     cv2.imwrite(img_save_path, im0)
-                    #     noti_manager.notify(label.split(' ')[0], bnd_box, (img_save_path, open(img_save_path, 'rb')))
+                    if cls in cls_noti:
+                        loop = noti_manager.event_loop
+                        loop.run_until_complete(send_notification(noti_manager, im0, xyxy, label))
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
@@ -146,6 +154,7 @@ def detect(save_img=False):
             if view_img:
                 cv2.imshow(p, im0)
                 if cv2.waitKey(1) == ord('q'):  # q to quit
+                    noti_manager.event_loop.close()
                     raise StopIteration
 
             # Save results (image with detections)

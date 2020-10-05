@@ -1,4 +1,5 @@
 import requests
+import asyncio
 from . import config
 from datetime import datetime
 from pprint import pprint
@@ -34,12 +35,15 @@ class BoundingBox:
         return self.__str__()
 
 class NotificationManager:
-    def __init__(self, server, camera_id=0):
+    def __init__(self, server, camera_id=0, lim=5):
         self.prev = dict()
         self.server = server
         self.camera_id = camera_id
+        self.event_loop = asyncio.new_event_loop()
+        self.lim = lim
+        self.count = 0
 
-    def send_notification(self, label, bnd_box, msg, img):
+    async def send_notification(self, label, bnd_box, msg, img):
         """
         Send a request to the notification server
         """
@@ -57,11 +61,15 @@ class NotificationManager:
 
         resp = requests.post(self.server, files=files, data=data)
         print(resp.status_code)
+        self.count += 1
 
-    def notify(self, label, bnd_box, img):
+    async def notify(self, label, bnd_box, img):
         """
         Notify if the previous bounding boxes of the same classes don't overlap
         """
+        if self.count >= self.lim:
+            return
+
         prev_boxes = self.prev.get(label, [])
 
         is_overlap = False
@@ -77,7 +85,7 @@ class NotificationManager:
         if not is_overlap:
             # Send notification
             print('Detected: {}\nBox: {}, {}, {}, {}'.format(label, bnd_box.xmin, bnd_box.xmax, bnd_box.ymin, bnd_box.ymax))
-            self.send_notification(label=label, bnd_box=bnd_box, msg='Detected: {}\nBox: {}, {}, {}, {}'.format(label, bnd_box.xmin, bnd_box.xmax, bnd_box.ymin, bnd_box.ymax), img=img)
+            await self.send_notification(label=label, bnd_box=bnd_box, msg='Detected: {}\nBox: {}, {}, {}, {}'.format(label, bnd_box.xmin, bnd_box.xmax, bnd_box.ymin, bnd_box.ymax), img=img)
             self.prev[label] = [bnd_box]
         elif not exists:
             self.prev[label].append(bnd_box)
